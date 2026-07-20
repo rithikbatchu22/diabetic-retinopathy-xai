@@ -1,0 +1,14 @@
+numpy
+pandas
+pyyaml
+tqdm
+scikit-learn
+matplotlib
+seaborn
+Pillow
+opencv-python
+timm
+albumentations
+streamlit
+reportlab
+kaggle

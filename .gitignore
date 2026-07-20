@@ -1,0 +1,22 @@
+# ---- Python ----
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ---- Data & outputs (do not commit) ----
+data/
+models/*.pth
+models/*.pt
+reports/generated/
+
+# ---- OS / IDE ----
+.DS_Store
+Thumbs.db
+.vscode/
