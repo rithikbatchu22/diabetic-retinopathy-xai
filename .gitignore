@@ -10,8 +10,14 @@ __pycache__/
 # Jupyter
 .ipynb_checkpoints/
 
-# ---- Data & outputs (do not commit) ----
-data/
+# ---- Data & outputs ----
+# Do NOT commit large/raw images
+data/raw/
+data/processed/
+
+# We DO want to commit split CSVs for reproducibility
+# so we are NOT ignoring data/splits/
+
 models/*.pth
 models/*.pt
 reports/generated/
