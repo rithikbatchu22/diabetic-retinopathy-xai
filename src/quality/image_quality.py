@@ -19,7 +19,7 @@ class QualityResult:
 
 def check_image_quality(
     img_rgb_uint8: np.ndarray,
-    blur_threshold: float = 5.0,          # << updated (was 100)
+    blur_threshold: float = 15.0,         # << updated (was 100)
     brightness_low: float = 30.0,
     brightness_high: float = 220.0,
     crop_black: bool = True,
