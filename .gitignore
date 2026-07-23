@@ -19,6 +19,7 @@ data/processed/
 # so we are NOT ignoring data/splits/
 
 models/*.pth
+!models/best_model.pth
 models/*.pt
 reports/generated/
 
