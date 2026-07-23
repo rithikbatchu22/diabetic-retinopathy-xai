@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Union
+from typing import Union
 
 import numpy as np
 import torch
@@ -32,19 +32,39 @@ class XAIResult:
     heatmap_rgb: np.ndarray
 
 
-@torch.inference_mode()
 def load_model_from_checkpoint(
     checkpoint_path: Union[str, Path],
     model_name: str = "efficientnet_b0",
     num_classes: int = 5,
     device: str | None = None,
 ):
+    """
+    Load trained model from checkpoint.
+
+    IMPORTANT:
+    Do NOT wrap this in torch.inference_mode() because Grad-CAM
+    requires gradients (backward pass) later.
+    """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    model = create_dr_model(model_name=model_name, num_classes=num_classes, pretrained=False)
+
+    model = create_dr_model(
+        model_name=model_name,
+        num_classes=num_classes,
+        pretrained=False,
+    )
+
     ckpt = torch.load(str(checkpoint_path), map_location="cpu")
     model.load_state_dict(ckpt["model_state"])
     model.to(device).eval()
+
     return model, device
+
+
+def _softmax_np(x: np.ndarray) -> np.ndarray:
+    """Numerically stable softmax for a 1D numpy array."""
+    x = x - x.max()
+    e = np.exp(x)
+    return e / (e.sum() + 1e-12)
 
 
 def predict_with_gradcam(
@@ -53,29 +73,39 @@ def predict_with_gradcam(
     image_path: Union[str, Path],
     checkpoint_image_size: int = 384,
 ) -> XAIResult:
-    # 1) preprocess for visualization + model input
-    pre_cfg = PreprocessConfig(image_size=checkpoint_image_size, crop_black=True, enhance_contrast=False)
-    img_rgb = preprocess_image(image_path, pre_cfg)  # uint8 RGB
+    """
+    Run one image through the model with Grad-CAM.
 
-    # 2) model input transform (normalize + tensor)
+    Single forward + backward pass (done inside GradCAM.generate),
+    so no inference_mode conflicts.
+    """
+    # 1) Preprocess (uint8 RGB for visualization + as base for transform)
+    pre_cfg = PreprocessConfig(
+        image_size=checkpoint_image_size,
+        crop_black=True,
+        enhance_contrast=False,
+    )
+    img_rgb = preprocess_image(image_path, pre_cfg)
+
+    # 2) Model input transform (normalize + tensor)
     tfm = get_val_transforms(AugmentConfig(image_size=checkpoint_image_size))
     x = tfm(image=img_rgb)["image"].unsqueeze(0).to(device)
 
-    # 3) prediction
-    logits = model(x)
-    probs = torch.softmax(logits, dim=1)[0].detach().cpu().numpy()
-    pred_class = int(probs.argmax())
-    confidence = float(probs[pred_class])
-
-    # 4) Grad-CAM (needs gradients)
+    # 3) Grad-CAM (forward + backward on predicted class)
     cam = GradCAM(model)
-    out = cam.generate(x, img_rgb, class_idx=pred_class)
+    gc = cam.generate(x, img_rgb)  # class_idx=None -> uses argmax
+    cam.remove_hooks()
+
+    # 4) Probabilities from the logits captured during Grad-CAM forward
+    probs = _softmax_np(gc.logits)
+    pred_class = int(gc.class_idx)
+    confidence = float(probs[pred_class])
 
     return XAIResult(
         pred_class=pred_class,
         pred_label=CLASS_NAMES[pred_class],
         confidence=confidence,
         probs=probs,
-        overlay_rgb=out.overlay_rgb,
-        heatmap_rgb=out.heatmap_rgb,
+        overlay_rgb=gc.overlay_rgb,
+        heatmap_rgb=gc.heatmap_rgb,
     )
