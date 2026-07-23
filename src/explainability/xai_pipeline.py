@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Union
+import contextlib
 
 import numpy as np
 import torch
@@ -39,11 +40,8 @@ def load_model_from_checkpoint(
     device: str | None = None,
 ):
     """
-    Load trained model from checkpoint.
-
     IMPORTANT:
-    Do NOT wrap this in torch.inference_mode() because Grad-CAM
-    requires gradients (backward pass) later.
+    Do NOT use torch.inference_mode here. Grad-CAM needs backward later.
     """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -56,12 +54,10 @@ def load_model_from_checkpoint(
     ckpt = torch.load(str(checkpoint_path), map_location="cpu")
     model.load_state_dict(ckpt["model_state"])
     model.to(device).eval()
-
     return model, device
 
 
 def _softmax_np(x: np.ndarray) -> np.ndarray:
-    """Numerically stable softmax for a 1D numpy array."""
     x = x - x.max()
     e = np.exp(x)
     return e / (e.sum() + 1e-12)
@@ -74,38 +70,47 @@ def predict_with_gradcam(
     checkpoint_image_size: int = 384,
 ) -> XAIResult:
     """
-    Run one image through the model with Grad-CAM.
+    Robust Grad-CAM prediction.
 
-    Single forward + backward pass (done inside GradCAM.generate),
-    so no inference_mode conflicts.
+    Key fix:
+    - We explicitly DISABLE torch.inference_mode() inside this function,
+      so even if the caller accidentally runs under inference_mode,
+      the tensors used for Grad-CAM are normal autograd tensors.
     """
-    # 1) Preprocess (uint8 RGB for visualization + as base for transform)
-    pre_cfg = PreprocessConfig(
-        image_size=checkpoint_image_size,
-        crop_black=True,
-        enhance_contrast=False,
-    )
-    img_rgb = preprocess_image(image_path, pre_cfg)
 
-    # 2) Model input transform (normalize + tensor)
-    tfm = get_val_transforms(AugmentConfig(image_size=checkpoint_image_size))
-    x = tfm(image=img_rgb)["image"].unsqueeze(0).to(device)
+    # Some PyTorch versions support torch.inference_mode(False). If not, do nothing.
+    try:
+        infer_off_ctx = torch.inference_mode(False)
+    except TypeError:
+        infer_off_ctx = contextlib.nullcontext()
 
-    # 3) Grad-CAM (forward + backward on predicted class)
-    cam = GradCAM(model)
-    gc = cam.generate(x, img_rgb)  # class_idx=None -> uses argmax
-    cam.remove_hooks()
+    with infer_off_ctx:
+        # 1) Preprocess (uint8 RGB)
+        pre_cfg = PreprocessConfig(
+            image_size=checkpoint_image_size,
+            crop_black=True,
+            enhance_contrast=False,
+        )
+        img_rgb = preprocess_image(image_path, pre_cfg)
 
-    # 4) Probabilities from the logits captured during Grad-CAM forward
-    probs = _softmax_np(gc.logits)
-    pred_class = int(gc.class_idx)
-    confidence = float(probs[pred_class])
+        # 2) Model input tensor (created OUTSIDE inference_mode)
+        tfm = get_val_transforms(AugmentConfig(image_size=checkpoint_image_size))
+        x = tfm(image=img_rgb)["image"].unsqueeze(0).to(device)
 
-    return XAIResult(
-        pred_class=pred_class,
-        pred_label=CLASS_NAMES[pred_class],
-        confidence=confidence,
-        probs=probs,
-        overlay_rgb=gc.overlay_rgb,
-        heatmap_rgb=gc.heatmap_rgb,
-    )
+        # 3) Grad-CAM forward+backward
+        cam = GradCAM(model)
+        gc = cam.generate(x, img_rgb)  # chooses argmax class by default
+        cam.remove_hooks()
+
+        probs = _softmax_np(gc.logits)
+        pred_class = int(gc.class_idx)
+        confidence = float(probs[pred_class])
+
+        return XAIResult(
+            pred_class=pred_class,
+            pred_label=CLASS_NAMES[pred_class],
+            confidence=confidence,
+            probs=probs,
+            overlay_rgb=gc.overlay_rgb,
+            heatmap_rgb=gc.heatmap_rgb,
+        )
