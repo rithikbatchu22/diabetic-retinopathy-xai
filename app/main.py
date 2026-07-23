@@ -1,3 +1,9 @@
+import sys
+from pathlib import Path
+
+# Ensure repo root is on PYTHONPATH (fix for Streamlit Cloud)
+ROOT_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT_DIR))
 import streamlit as st
 from pathlib import Path
 from datetime import datetime
