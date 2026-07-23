@@ -6,9 +6,9 @@ scikit-learn
 matplotlib
 seaborn
 Pillow
-opencv-python
+opencv-python-headless
 timm
 albumentations
 streamlit
 reportlab
-kaggle
+torch
